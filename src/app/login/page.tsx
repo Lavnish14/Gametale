@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mail, Lock, Eye, EyeOff, ArrowLeft, Gamepad2, User, X } from "lucide-react";
+import { Mail, Lock, Eye, EyeOff, ArrowLeft, User, X } from "lucide-react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/toast";
@@ -216,8 +217,15 @@ export default function LoginPage() {
                         whileHover={{ scale: 1.05 }}
                         className="inline-flex items-center gap-3"
                     >
-                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/30">
-                            <Gamepad2 className="w-6 h-6 text-white" />
+                        <div className="w-12 h-12 rounded-xl overflow-hidden shadow-lg shadow-blue-500/30">
+                            <Image
+                                src="/logo.png"
+                                alt="GameTale"
+                                width={48}
+                                height={48}
+                                className="object-cover"
+                                priority
+                            />
                         </div>
                         <span className="text-2xl font-bold gradient-text-animated">GameTale</span>
                     </motion.div>

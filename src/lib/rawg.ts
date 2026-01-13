@@ -142,24 +142,69 @@ function filterReleasedGames(games: Game[]): Game[] {
 }
 
 /**
- * Get trending games - Games people are playing RIGHT NOW (2026 focus)
- * Prioritizes games released in 2026, then recent 2025 releases
+ * Get current date/time in IST (UTC+5:30)
+ * Used for all time-based logic to ensure consistency at 12 AM IST
+ */
+function getISTDate(): { nowIST: Date; dateIST: string; weekNumber: number; daysSinceEpoch: number } {
+    const nowUTC = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes
+    const nowIST = new Date(nowUTC.getTime() + istOffset);
+    const dateIST = nowIST.toISOString().split("T")[0];
+
+    // Calculate week number in IST (for weekly changes)
+    // Week starts on Monday in IST
+    const startOfYear = new Date(nowIST.getFullYear(), 0, 1);
+    const days = Math.floor((nowIST.getTime() - startOfYear.getTime()) / (24 * 60 * 60 * 1000));
+    const weekNumber = Math.floor((days + startOfYear.getDay()) / 7);
+
+    // Days since epoch (for calculating periods like every 3 days)
+    const daysSinceEpoch = Math.floor(nowIST.getTime() / (24 * 60 * 60 * 1000));
+
+    return { nowIST, dateIST, weekNumber, daysSinceEpoch };
+}
+
+/**
+ * Seeded shuffle - same seed produces same shuffle result
+ * Used to deterministically select games for a given time period
+ */
+function seededShuffle<T>(array: T[], seed: number): T[] {
+    const result = [...array];
+    let currentSeed = seed;
+
+    const random = () => {
+        currentSeed = (currentSeed * 1103515245 + 12345) & 0x7fffffff;
+        return currentSeed / 0x7fffffff;
+    };
+
+    for (let i = result.length - 1; i > 0; i--) {
+        const j = Math.floor(random() * (i + 1));
+        [result[i], result[j]] = [result[j], result[i]];
+    }
+
+    return result;
+}
+
+/**
+ * Get trending games - Games people are playing RIGHT NOW
+ * Changes every WEEK at 12:00 AM IST (Monday)
+ * Prioritizes games released in current year
  */
 export async function getTrendingGames(page = 1, pageSize = 12): Promise<GamesResponse> {
-    const today = new Date();
-    const todayStr = today.toISOString().split("T")[0];
-    const currentYear = today.getFullYear(); // 2026
+    const { nowIST, weekNumber } = getISTDate();
+    const nowUTC = new Date();
+    const todayStr = nowUTC.toISOString().split("T")[0];
+    const currentYear = nowIST.getFullYear();
 
     // Get games from the last 6 months for freshness
-    const sixMonthsAgo = new Date(today);
-    sixMonthsAgo.setMonth(today.getMonth() - 6);
+    const sixMonthsAgo = new Date(nowUTC);
+    sixMonthsAgo.setMonth(nowUTC.getMonth() - 6);
 
     // Fetch games ordered by ratings count (what people are playing)
     const response = await fetchFromRAWG<GamesResponse>("/games", {
         ordering: "-ratings_count,-rating",
         dates: `${sixMonthsAgo.toISOString().split("T")[0]},${todayStr}`,
         page: String(page),
-        page_size: String(pageSize * 4), // More to filter and prioritize
+        page_size: String(pageSize * 5), // More to filter and select from
     });
 
     // Filter to only released games with ratings
@@ -167,7 +212,7 @@ export async function getTrendingGames(page = 1, pageSize = 12): Promise<GamesRe
         if (game.tba) return false;
         if (!game.released) return false;
         if (game.released > todayStr) return false;
-        if (game.ratings_count < 20) return false; // Lower threshold for newer games
+        if (game.ratings_count < 20) return false;
         return true;
     });
 
@@ -184,58 +229,95 @@ export async function getTrendingGames(page = 1, pageSize = 12): Promise<GamesRe
         return b.ratings_count - a.ratings_count;
     });
 
-    console.log(`Trending: ${prioritizedGames.length} games (prioritizing ${currentYear})`);
+    // Use week number as seed - same week = same games
+    // Combine with year to ensure it changes each year
+    const seed = currentYear * 100 + weekNumber;
+    const shuffled = seededShuffle(prioritizedGames, seed);
+
+    console.log(`[Trending] Week ${weekNumber} of ${currentYear} | Showing: ${shuffled.slice(0, pageSize).map(g => g.name).join(', ')}`);
+    console.log(`[Trending] Changes every Monday at 12:00 AM IST`);
 
     return {
         ...response,
-        results: prioritizedGames.slice(0, pageSize),
+        results: shuffled.slice(0, pageSize),
     };
 }
 
 /**
- * Get upcoming HYPED games - 4 most anticipated 2026 releases
- * Only games with official 2026 release dates, ordered by hype/anticipation
+ * Get upcoming HYPED games - 4 most anticipated releases
+ * Changes every 3 DAYS at 12:00 AM IST
+ * Prioritizes: 
+ * 1. Games closest to release date (coming soon!)
+ * 2. Newly announced hyped games (lots of wishlists)
  */
 export async function getUpcomingGames(page = 1, pageSize = 4): Promise<GamesResponse> {
-    const today = new Date();
-    const todayStr = today.toISOString().split("T")[0];
-    const currentYear = today.getFullYear(); // 2026
+    const { nowIST, daysSinceEpoch } = getISTDate();
+    const nowUTC = new Date();
+    const todayStr = nowUTC.toISOString().split("T")[0];
+    const currentYear = nowIST.getFullYear();
 
-    // Get games releasing in 2026 (from tomorrow to end of 2026)
-    const tomorrow = new Date(today);
-    tomorrow.setDate(today.getDate() + 1);
+    // Calculate 3-day period number (changes every 3 days at 12 AM IST)
+    const threeDayPeriod = Math.floor(daysSinceEpoch / 3);
+
+    // Get games releasing from tomorrow to end of year
+    const tomorrow = new Date(nowUTC);
+    tomorrow.setDate(nowUTC.getDate() + 1);
     const yearEnd = `${currentYear}-12-31`;
 
-    // Fetch hyped upcoming games (ordered by how many people added them)
+    // Fetch more games to have a good selection pool
     const response = await fetchFromRAWG<GamesResponse>("/games", {
         ordering: "-added", // Most anticipated (most wishlisted/added)
         dates: `${tomorrow.toISOString().split("T")[0]},${yearEnd}`,
         page: String(page),
-        page_size: "20", // Fetch more to filter
+        page_size: "40", // Fetch more to filter and select from
     });
 
-    // Filter to only games with confirmed 2026 dates (not TBA placeholders)
+    // Filter to only upcoming games with confirmed dates
     const hypedGames = response.results.filter(game => {
-        // Must have a release date
         if (!game.released) return false;
-
-        // Must be in 2026
         if (!game.released.startsWith(String(currentYear))) return false;
-
-        // Not TBA
         if (game.tba) return false;
-
-        // Must be after today
         if (game.released <= todayStr) return false;
-
         return true;
     });
 
-    console.log(`Upcoming Hype: Found ${hypedGames.length} hyped 2026 games`);
+    // Sort by multiple factors:
+    // 1. Games releasing within 30 days get priority
+    // 2. Then by anticipation (added count / wishlists)
+    const thirtyDaysFromNow = new Date(nowUTC);
+    thirtyDaysFromNow.setDate(nowUTC.getDate() + 30);
+    const thirtyDaysStr = thirtyDaysFromNow.toISOString().split("T")[0];
+
+    const sortedGames = hypedGames.sort((a, b) => {
+        const aComingSoon = a.released <= thirtyDaysStr;
+        const bComingSoon = b.released <= thirtyDaysStr;
+
+        // Coming soon games first
+        if (aComingSoon && !bComingSoon) return -1;
+        if (bComingSoon && !aComingSoon) return 1;
+
+        // Within the same category, sort by release date (closer = higher priority)
+        if (aComingSoon && bComingSoon) {
+            return a.released.localeCompare(b.released);
+        }
+
+        // For non-coming-soon games, sort by hype (ratings_count as proxy)
+        return (b.ratings_count || 0) - (a.ratings_count || 0);
+    });
+
+    // Use 3-day period as seed for consistent selection
+    const seed = currentYear * 1000 + threeDayPeriod;
+
+    // Take top 12 candidates and shuffle with seed, then pick 4
+    const candidates = sortedGames.slice(0, 12);
+    const shuffled = seededShuffle(candidates, seed);
+
+    console.log(`[Upcoming] Period ${threeDayPeriod} | Showing: ${shuffled.slice(0, pageSize).map(g => `${g.name} (${g.released})`).join(', ')}`);
+    console.log(`[Upcoming] Changes every 3 days at 12:00 AM IST`);
 
     return {
         ...response,
-        results: hypedGames.slice(0, pageSize), // Only 4 games
+        results: shuffled.slice(0, pageSize),
     };
 }
 
@@ -435,32 +517,42 @@ export const getYearOptions = () => {
  * - Released in 2026 (current year) - fresh games only!
  * - Has ratings (people are actually playing it)
  * - Good rating
- * - Changes daily at 12:00 AM based on date hash
+ * - Changes daily at 12:00 AM IST (Indian Standard Time)
  */
 export async function getTodaysPickGame(): Promise<Game | null> {
-    const today = new Date();
-    const todayStr = today.toISOString().split("T")[0]; // YYYY-MM-DD
-    const currentYear = today.getFullYear(); // 2026
+    // Get current date in IST (UTC+5:30)
+    // This ensures the pick changes at 12 AM IST regardless of user's timezone
+    const nowUTC = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in milliseconds
+    const nowIST = new Date(nowUTC.getTime() + istOffset);
+
+    // Get IST date string (YYYY-MM-DD in IST)
+    const todayIST = nowIST.toISOString().split("T")[0];
+
+    // For API calls, use UTC date (RAWG uses UTC for release dates)
+    const todayUTC = nowUTC.toISOString().split("T")[0];
+    const currentYear = nowIST.getFullYear(); // Year in IST
 
     // Start of current year
     const yearStart = `${currentYear}-01-01`;
 
-    console.log(`[Today's Pick] Looking for ${currentYear} games (today: ${todayStr})`);
+    console.log(`[Today's Pick] Date in IST: ${todayIST}, UTC: ${todayUTC}`);
+    console.log(`[Today's Pick] Looking for ${currentYear} games...`);
 
     // First try: Games released in the last 14 days (very fresh!)
-    const twoWeeksAgo = new Date(today);
-    twoWeeksAgo.setDate(today.getDate() - 14);
+    const twoWeeksAgo = new Date(nowUTC);
+    twoWeeksAgo.setDate(nowUTC.getDate() - 14);
 
     const recentResponse = await fetchFromRAWG<GamesResponse>("/games", {
         ordering: "-rating,-ratings_count",
-        dates: `${twoWeeksAgo.toISOString().split("T")[0]},${todayStr}`,
+        dates: `${twoWeeksAgo.toISOString().split("T")[0]},${todayUTC}`,
         page_size: "30",
     });
 
     let validGames = recentResponse.results.filter(game => {
         if (game.tba) return false;
         if (!game.released) return false;
-        if (game.released > todayStr) return false;
+        if (game.released > todayUTC) return false;
         // For very recent games, accept even 30+ ratings
         if (game.ratings_count < 30) return false;
         if (game.rating < 3.5) return false;
@@ -477,14 +569,14 @@ export async function getTodaysPickGame(): Promise<Game | null> {
 
         const yearResponse = await fetchFromRAWG<GamesResponse>("/games", {
             ordering: "-rating,-ratings_count",
-            dates: `${yearStart},${todayStr}`,
+            dates: `${yearStart},${todayUTC}`,
             page_size: "50",
         });
 
         validGames = yearResponse.results.filter(game => {
             if (game.tba) return false;
             if (!game.released) return false;
-            if (game.released > todayStr) return false;
+            if (game.released > todayUTC) return false;
             if (game.ratings_count < 50) return false;
             if (game.rating < 3.5) return false;
             return true;
@@ -499,14 +591,14 @@ export async function getTodaysPickGame(): Promise<Game | null> {
 
         const lowReqResponse = await fetchFromRAWG<GamesResponse>("/games", {
             ordering: "-added,-rating",
-            dates: `${yearStart},${todayStr}`,
+            dates: `${yearStart},${todayUTC}`,
             page_size: "50",
         });
 
         validGames = lowReqResponse.results.filter(game => {
             if (game.tba) return false;
             if (!game.released) return false;
-            if (game.released > todayStr) return false;
+            if (game.released > todayUTC) return false;
             if (game.ratings_count < 10) return false; // Very low threshold
             if (game.rating < 3.0) return false;
             return true;
@@ -519,19 +611,19 @@ export async function getTodaysPickGame(): Promise<Game | null> {
     if (validGames.length === 0) {
         console.log(`[Today's Pick] No ${currentYear} games found, using popular recent games...`);
 
-        const sixMonthsAgo = new Date(today);
-        sixMonthsAgo.setMonth(today.getMonth() - 6);
+        const sixMonthsAgo = new Date(nowUTC);
+        sixMonthsAgo.setMonth(nowUTC.getMonth() - 6);
 
         const popularResponse = await fetchFromRAWG<GamesResponse>("/games", {
             ordering: "-ratings_count",
-            dates: `${sixMonthsAgo.toISOString().split("T")[0]},${todayStr}`,
+            dates: `${sixMonthsAgo.toISOString().split("T")[0]},${todayUTC}`,
             page_size: "30",
         });
 
         validGames = popularResponse.results.filter(game => {
             if (game.tba) return false;
             if (!game.released) return false;
-            if (game.released > todayStr) return false;
+            if (game.released > todayUTC) return false;
             if (game.ratings_count < 100) return false;
             return true;
         });
@@ -542,19 +634,25 @@ export async function getTodaysPickGame(): Promise<Game | null> {
         return null;
     }
 
-    // Pick one game based on today's date
-    // This hash changes when the date changes (at midnight)
-    // Format: YYYY-MM-DD -> different hash each day
+    // Pick one game based on IST date (changes at 12 AM IST)
+    // Hash is based on IST date string, so pick changes when IST date changes
     let hash = 0;
-    for (let i = 0; i < todayStr.length; i++) {
-        hash = ((hash << 5) - hash) + todayStr.charCodeAt(i);
+    for (let i = 0; i < todayIST.length; i++) {
+        hash = ((hash << 5) - hash) + todayIST.charCodeAt(i);
         hash |= 0;
     }
     const index = Math.abs(hash) % validGames.length;
 
     const picked = validGames[index];
+
+    // Calculate next pick time (12 AM IST tomorrow)
+    const tomorrowIST = new Date(nowIST);
+    tomorrowIST.setDate(tomorrowIST.getDate() + 1);
+    tomorrowIST.setHours(0, 0, 0, 0);
+    const nextPickTimeUTC = new Date(tomorrowIST.getTime() - istOffset);
+
     console.log(`✓ Today's Pick: ${picked.name} (released: ${picked.released}, rating: ${picked.rating}, ratings: ${picked.ratings_count})`);
-    console.log(`  Pick changes at midnight (next pick date: ${new Date(today.getTime() + 86400000).toISOString().split("T")[0]})`);
+    console.log(`  IST Date: ${todayIST} | Next pick at 12:00 AM IST (${nextPickTimeUTC.toISOString()})`);
 
     return picked;
 }

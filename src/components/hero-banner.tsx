@@ -234,13 +234,7 @@ export function HeroBanner({
                         </div>
                     )}
 
-                    {/* Playtime */}
-                    {game.playtime > 0 && (
-                        <div className="flex items-center gap-2 text-sm text-zinc-300">
-                            <Clock className="w-4 h-4 text-zinc-500" />
-                            <span>{game.playtime}h avg playtime</span>
-                        </div>
-                    )}
+
                 </motion.div>
 
                 {/* Enhanced Genres */}

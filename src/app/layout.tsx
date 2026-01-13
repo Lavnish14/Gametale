@@ -36,7 +36,11 @@ export const metadata: Metadata = {
     description: "Discover, track, and review your favorite games.",
   },
   icons: {
-    icon: "/favicon.ico",
+    icon: [
+      { url: "/favicon.png", type: "image/png" },
+      { url: "/icon.png", type: "image/png", sizes: "512x512" },
+    ],
+    apple: "/icon.png",
   },
 };
 

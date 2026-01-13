@@ -419,13 +419,7 @@ export default function GamePage({ params }: GamePageProps) {
                                         </div>
                                     )}
 
-                                    {/* Playtime */}
-                                    {game.playtime > 0 && (
-                                        <div className="flex items-center gap-1.5">
-                                            <Clock className="w-4 h-4" />
-                                            <span>{game.playtime}h average</span>
-                                        </div>
-                                    )}
+
                                 </div>
 
                                 {/* Genres */}

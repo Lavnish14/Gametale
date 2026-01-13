@@ -300,35 +300,35 @@ export default function HomePage() {
 
   const todaysPick = heroGame;
 
-  // Fetch trailer (YouTube fallback)
+  // Fetch trailer with priority: YouTube Trailer → YouTube Gameplay → RAWG → HD Image
   const { data: trailerData } = useQuery({
     queryKey: ["trailer", todaysPick?.id, todaysPick?.name],
     queryFn: async () => {
       if (!todaysPick) return null;
 
-      // 1. Try RAWG trailers first (best quality, official)
+      // 1. Try YouTube TRAILER first (official trailers are best for hero)
+      console.log(`[Video Search] Looking for trailer for: ${todaysPick.name}`);
+      let youtubeId = await searchYoutubeVideo(todaysPick.name);
+
+      // Also try with slug if name didn't work
+      if (!youtubeId && todaysPick.slug && todaysPick.slug !== todaysPick.name.toLowerCase()) {
+        const slugAsName = todaysPick.slug.replace(/-/g, ' ');
+        youtubeId = await searchYoutubeVideo(slugAsName);
+      }
+
+      if (youtubeId) {
+        console.log(`✓ Using YouTube video for: ${todaysPick.name}`);
+        return { type: 'youtube', src: youtubeId };
+      }
+
+      // 2. Try RAWG trailers as last resort (sometimes they have exclusive footage)
       const rawgTrailers = await getGameTrailers(todaysPick.id);
       if (rawgTrailers.results.length > 0) {
         console.log(`✓ Using RAWG trailer for: ${todaysPick.name}`);
         return { type: 'rawg', src: rawgTrailers.results[0].data.max };
       }
 
-      // 2. Try YouTube with game name
-      let youtubeId = await searchYoutubeVideo(todaysPick.name);
-      if (youtubeId) {
-        return { type: 'youtube', src: youtubeId };
-      }
-
-      // 3. Try YouTube with slug (often contains full name like "mouse-pi-for-hire")
-      if (todaysPick.slug && todaysPick.slug !== todaysPick.name.toLowerCase()) {
-        const slugAsName = todaysPick.slug.replace(/-/g, ' ');
-        youtubeId = await searchYoutubeVideo(slugAsName);
-        if (youtubeId) {
-          return { type: 'youtube', src: youtubeId };
-        }
-      }
-
-      // 4. No video found - will show HD background image instead
+      // 3. No video found - will show HD background image
       console.log(`No trailer found for: ${todaysPick.name}, using HD image`);
       return null;
     },
@@ -353,8 +353,15 @@ export default function HomePage() {
               whileHover={{ scale: 1.05 }}
               className="flex items-center gap-3"
             >
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/25">
-                <span className="text-white font-bold text-lg">G</span>
+              <div className="w-10 h-10 rounded-xl overflow-hidden shadow-lg shadow-blue-500/25">
+                <Image
+                  src="/logo.png"
+                  alt="GameTale"
+                  width={40}
+                  height={40}
+                  className="object-cover"
+                  priority
+                />
               </div>
               <div className="hidden sm:block">
                 <span className="text-xl font-bold gradient-text-animated">GameTale</span>
