@@ -1,4 +1,5 @@
 # 🎮 GameTale - Next-Gen Game Discovery & Review Platform
+### 🔴 Live Demo: [https://gametale.games](https://gametale.games)
 
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-success)
 ![Tech Stack](https://img.shields.io/badge/Stack-Next.js%20%7C%20Supabase%20%7C%20Tailwind-blue)
