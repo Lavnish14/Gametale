@@ -272,14 +272,20 @@ export async function getUpcomingGames(page = 1, pageSize = 4): Promise<GamesRes
         page_size: "40", // Fetch more to filter and select from
     });
 
-    // Filter to only upcoming games with confirmed dates
+    // Filter to only upcoming games with confirmed dates and images
     const hypedGames = response.results.filter(game => {
         if (!game.released) return false;
         if (!game.released.startsWith(String(currentYear))) return false;
         if (game.tba) return false;
         if (game.released <= todayStr) return false;
+        if (!game.background_image) return false; // Must have an image
         return true;
     });
+
+    // Remove duplicates by game id
+    const uniqueGames = hypedGames.filter((game, index, self) =>
+        index === self.findIndex((g) => g.id === game.id)
+    );
 
     // Sort by multiple factors:
     // 1. Games releasing within 30 days get priority
@@ -288,7 +294,7 @@ export async function getUpcomingGames(page = 1, pageSize = 4): Promise<GamesRes
     thirtyDaysFromNow.setDate(nowUTC.getDate() + 30);
     const thirtyDaysStr = thirtyDaysFromNow.toISOString().split("T")[0];
 
-    const sortedGames = hypedGames.sort((a, b) => {
+    const sortedGames = uniqueGames.sort((a, b) => {
         const aComingSoon = a.released <= thirtyDaysStr;
         const bComingSoon = b.released <= thirtyDaysStr;
 

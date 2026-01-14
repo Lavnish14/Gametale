@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { getGameDetails, getGameScreenshots, type Screenshot } from "@/lib/rawg";
+import { getStoreLink } from "@/lib/affiliate-links";
 import { supabase, type RatingType } from "@/lib/supabase";
 import { getRatingClass, cn } from "@/lib/utils";
 import { ReviewMeter } from "@/components/review-meter";
@@ -588,19 +589,22 @@ export default function GamePage({ params }: GamePageProps) {
                                     </div>
                                 )}
 
-                                {/* Stores */}
+                                {/* Stores - Buy Now */}
                                 {game.stores && game.stores.length > 0 && (
                                     <div>
-                                        <span className="text-xs text-zinc-500 block mb-2">Available On</span>
+                                        <span className="text-xs text-zinc-500 block mb-2">Buy Now</span>
                                         <div className="flex flex-wrap gap-2">
                                             {game.stores.map((s) => (
-                                                <span
+                                                <a
                                                     key={s.store.id}
-                                                    className="flex items-center gap-1 px-2 py-1 text-xs bg-zinc-800/80 text-zinc-400 rounded hover:text-blue-400 transition-colors cursor-pointer"
+                                                    href={getStoreLink(s.store.slug, game.name)}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="flex items-center gap-1 px-2 py-1 text-xs bg-zinc-800/80 text-zinc-400 rounded hover:bg-blue-600/20 hover:text-blue-400 transition-colors cursor-pointer"
                                                 >
                                                     {s.store.name}
                                                     <ExternalLink className="w-3 h-3" />
-                                                </span>
+                                                </a>
                                             ))}
                                         </div>
                                     </div>
