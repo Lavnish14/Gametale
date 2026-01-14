@@ -15,25 +15,51 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const siteUrl = "https://gametale.games";
+
 export const metadata: Metadata = {
-  title: "GameTale | Your Gaming Universe",
+  metadataBase: new URL(siteUrl),
+  title: {
+    default: "GameTale | Your Gaming Universe",
+    template: "%s | GameTale",
+  },
   description: "Discover, track, and review your favorite games. Join the ultimate gaming community with real ratings from real gamers.",
-  keywords: ["games", "gaming", "reviews", "wishlist", "gamepass", "steam", "pc games", "playstation", "xbox", "nintendo"],
-  authors: [{ name: "GameTale" }],
+  keywords: ["games", "gaming", "reviews", "wishlist", "gamepass", "steam", "pc games", "playstation", "xbox", "nintendo", "game ratings", "game reviews", "gaming community"],
+  authors: [{ name: "GameTale", url: siteUrl }],
   creator: "GameTale",
   publisher: "GameTale",
-  robots: "index, follow",
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      'max-video-preview': -1,
+      'max-image-preview': 'large',
+      'max-snippet': -1,
+    },
+  },
   openGraph: {
     title: "GameTale | Your Gaming Universe",
-    description: "Discover, track, and review your favorite games. Join the ultimate gaming community.",
+    description: "Discover, track, and review your favorite games. Join the ultimate gaming community with real ratings from real gamers.",
+    url: siteUrl,
     type: "website",
     siteName: "GameTale",
     locale: "en_US",
+    images: [
+      {
+        url: "/og-image.png",
+        width: 1200,
+        height: 630,
+        alt: "GameTale - Your Gaming Universe",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "GameTale | Your Gaming Universe",
-    description: "Discover, track, and review your favorite games.",
+    description: "Discover, track, and review your favorite games. Join the ultimate gaming community.",
+    images: ["/og-image.png"],
   },
   icons: {
     icon: [
@@ -41,6 +67,10 @@ export const metadata: Metadata = {
       { url: "/icon.png?v=2", type: "image/png", sizes: "512x512" },
     ],
     apple: "/icon.png?v=2",
+  },
+  verification: {
+    // Add your Google Search Console verification code here
+    // google: "your-google-verification-code",
   },
 };
 
