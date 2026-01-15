@@ -1,3 +1,15 @@
+import {
+    getGameOverride,
+    getGameOverrides,
+    upsertGameOverride,
+    getYouTubeTrendingCache,
+    getYouTubeTrendingScores,
+    upsertYouTubeTrendingCache,
+    getPriorityPublishers,
+    type GameOverride,
+} from "./supabase";
+import { checkForGameplayVideos, getYouTubeTrendingScore } from "./youtube";
+
 const RAWG_API_KEY = process.env.NEXT_PUBLIC_RAWG_API_KEY || "";
 const BASE_URL = "https://api.rawg.io/api";
 
@@ -106,39 +118,137 @@ async function fetchFromRAWG<T>(endpoint: string, params: Record<string, string>
 
 /**
  * Filter to only include RELEASED games (not TBA, not future dates)
- * Stricter checks to ensure games are actually playable
+ * Now includes auto-detection via YouTube gameplay videos
  */
-function filterReleasedGames(games: Game[]): Game[] {
+async function filterReleasedGames(games: Game[]): Promise<Game[]> {
     const today = new Date();
     const todayStr = today.toISOString().split("T")[0]; // YYYY-MM-DD
 
-    return games.filter(game => {
-        // Exclude TBA games
+    // Batch fetch overrides for all games
+    const gameIds = games.map(g => g.id);
+    const overrides = await getGameOverrides(gameIds);
+
+    const results: Game[] = [];
+
+    for (const game of games) {
+        const override = overrides.get(game.id);
+
+        // Check 1: Override explicitly says released
+        if (override?.is_released === true) {
+            console.log(`[Override] Released: ${game.name}`);
+            results.push(game);
+            continue;
+        }
+
+        // Check 2: Override explicitly says NOT released
+        if (override?.is_released === false) {
+            console.log(`[Override] Not released: ${game.name}`);
+            continue;
+        }
+
+        // Check 3: Override has release date
+        if (override?.release_date && override.release_date <= todayStr) {
+            console.log(`[Override date] Released (${override.release_date}): ${game.name}`);
+            results.push(game);
+            continue;
+        }
+
+        // Check 4: RAWG says TBA - skip (unless auto-detected later)
         if (game.tba) {
             console.log(`Filtered out (TBA): ${game.name}`);
-            return false;
+            continue;
         }
 
-        // Must have a release date
+        // Check 5: No release date
         if (!game.released) {
             console.log(`Filtered out (no release date): ${game.name}`);
-            return false;
+            continue;
         }
 
-        // Release date must be BEFORE today (string comparison works for YYYY-MM-DD)
+        // Check 6: Release date is in the past - it's released!
+        if (game.released <= todayStr) {
+            // Must have some ratings as proof
+            if (game.ratings_count >= 50) {
+                results.push(game);
+                continue;
+            }
+            // Low ratings but date passed - still include
+            if (game.ratings_count >= 10) {
+                results.push(game);
+                continue;
+            }
+        }
+
+        // Check 7: Future release date - filter out
         if (game.released > todayStr) {
             console.log(`Filtered out (future release ${game.released}): ${game.name}`);
+            continue;
+        }
+    }
+
+    return results;
+}
+
+/**
+ * Check if a SINGLE game is released (for game detail page)
+ * Logic:
+ * 1. Check override first
+ * 2. If release date in past = RELEASED
+ * 3. If TBA or no date = check YouTube for gameplay videos
+ */
+export async function isGameReleased(game: Game): Promise<boolean> {
+    const todayStr = new Date().toISOString().split("T")[0];
+
+    console.log(`[isGameReleased] Checking: ${game.name}, ID: ${game.id}, released: "${game.released}", tba: ${game.tba}, today: ${todayStr}`);
+
+    // Check override first (for manual corrections)
+    try {
+        const override = await getGameOverride(game.id);
+        if (override?.is_released === true) {
+            console.log(`[isGameReleased] Override: ${game.name} = RELEASED`);
+            return true;
+        }
+        if (override?.is_released === false) {
+            console.log(`[isGameReleased] Override: ${game.name} = NOT RELEASED`);
             return false;
         }
+    } catch (e) {
+        // Ignore override errors, continue with checks
+    }
 
-        // Must have ratings (proof people actually played it)
-        if (game.ratings_count < 50) {
-            console.log(`Filtered out (too few ratings: ${game.ratings_count}): ${game.name}`);
-            return false;
-        }
-
+    // If release date exists and is in the past = RELEASED
+    if (game.released && game.released <= todayStr) {
+        console.log(`[isGameReleased] Date check: ${game.name} released on ${game.released} = RELEASED`);
         return true;
-    });
+    }
+
+    // If TBA or no release date = check YouTube for gameplay videos
+    // This is the AUTO-DETECTION for games like Hytale where RAWG hasn't updated
+    if (game.tba || !game.released) {
+        console.log(`[isGameReleased] TBA/No date - checking YouTube for: ${game.name}`);
+
+        try {
+            const youtubeCheck = await checkForGameplayVideos(game.name);
+            if (youtubeCheck.hasGameplay) {
+                console.log(`[isGameReleased] YouTube detected gameplay: ${game.name} = RELEASED`);
+                // Cache for future so we don't check YouTube every time
+                try {
+                    await upsertGameOverride(game.id, game.name, {
+                        is_released: true,
+                        detected_via: 'youtube_gameplay',
+                    });
+                } catch (e) {
+                    // Ignore cache errors
+                }
+                return true;
+            }
+        } catch (e) {
+            console.log(`[isGameReleased] YouTube check failed for ${game.name}`);
+        }
+    }
+
+    console.log(`[isGameReleased] ${game.name} = NOT RELEASED`);
+    return false;
 }
 
 /**
@@ -185,9 +295,9 @@ function seededShuffle<T>(array: T[], seed: number): T[] {
 }
 
 /**
- * Get trending games - Games people are playing RIGHT NOW
+ * Get trending games - Now based on YouTube activity
  * Changes every WEEK at 12:00 AM IST (Monday)
- * Prioritizes games released in current year
+ * Prioritizes games with high YouTube trending scores
  */
 export async function getTrendingGames(page = 1, pageSize = 12): Promise<GamesResponse> {
     const { nowIST, weekNumber } = getISTDate();
@@ -195,47 +305,76 @@ export async function getTrendingGames(page = 1, pageSize = 12): Promise<GamesRe
     const todayStr = nowUTC.toISOString().split("T")[0];
     const currentYear = nowIST.getFullYear();
 
-    // Get games from the last 6 months for freshness
+    // Get games from the last 6 months
     const sixMonthsAgo = new Date(nowUTC);
     sixMonthsAgo.setMonth(nowUTC.getMonth() - 6);
 
-    // Fetch games ordered by ratings count (what people are playing)
+    // Fetch candidate games
     const response = await fetchFromRAWG<GamesResponse>("/games", {
-        ordering: "-ratings_count,-rating",
+        ordering: "-added,-rating",
         dates: `${sixMonthsAgo.toISOString().split("T")[0]},${todayStr}`,
         page: String(page),
-        page_size: String(pageSize * 5), // More to filter and select from
+        page_size: String(pageSize * 4),
     });
 
-    // Filter to only released games with ratings
+    // Get overrides
+    const gameIds = response.results.map(g => g.id);
+    const overrides = await getGameOverrides(gameIds);
+
+    // Filter to released games
     const releasedGames = response.results.filter(game => {
+        const override = overrides.get(game.id);
+
+        if (override?.is_released === true) return true;
+        if (override?.is_released === false) return false;
+        if (override?.release_date && override.release_date <= todayStr) return true;
+
         if (game.tba) return false;
         if (!game.released) return false;
         if (game.released > todayStr) return false;
-        if (game.ratings_count < 20) return false;
+
         return true;
     });
 
-    // Prioritize 2026 games, then sort by ratings_count
-    const prioritizedGames = releasedGames.sort((a, b) => {
-        const aYear = new Date(a.released).getFullYear();
-        const bYear = new Date(b.released).getFullYear();
+    // Get YouTube trending scores from cache
+    const youtubeCacheMap = await getYouTubeTrendingScores(releasedGames.map(g => g.id));
 
-        // 2026 games first
-        if (aYear === currentYear && bYear !== currentYear) return -1;
-        if (bYear === currentYear && aYear !== currentYear) return 1;
+    // Score each game
+    interface TrendingGame {
+        game: Game;
+        youtubeTrending: number;
+        overrideBoost: number;
+        yearBonus: number;
+        totalScore: number;
+    }
 
-        // Then by ratings count (popularity)
-        return b.ratings_count - a.ratings_count;
+    const scoredGames: TrendingGame[] = releasedGames.map(game => {
+        const override = overrides.get(game.id);
+        const ytCache = youtubeCacheMap.get(game.id);
+
+        const youtubeTrending = ytCache?.trending_score || 0;
+        const overrideBoost = override?.is_trending ? 500 : (override?.trending_score || 0);
+        const yearBonus = new Date(game.released).getFullYear() === currentYear ? 200 : 0;
+
+        return {
+            game,
+            youtubeTrending,
+            overrideBoost,
+            yearBonus,
+            totalScore: youtubeTrending + overrideBoost + yearBonus + (game.ratings_count || 0),
+        };
     });
 
-    // Use week number as seed - same week = same games
-    // Combine with year to ensure it changes each year
-    const seed = currentYear * 100 + weekNumber;
-    const shuffled = seededShuffle(prioritizedGames, seed);
+    // Sort by total score
+    scoredGames.sort((a, b) => b.totalScore - a.totalScore);
 
-    console.log(`[Trending] Week ${weekNumber} of ${currentYear} | Showing: ${shuffled.slice(0, pageSize).map(g => g.name).join(', ')}`);
-    console.log(`[Trending] Changes every Monday at 12:00 AM IST`);
+    // Use week number as seed for variety
+    const seed = currentYear * 100 + weekNumber;
+    const topCandidates = scoredGames.slice(0, pageSize * 2).map(sg => sg.game);
+    const shuffled = seededShuffle(topCandidates, seed);
+
+    console.log(`[Trending] Week ${weekNumber} | YouTube-based selection`);
+    console.log(`[Trending] Top: ${shuffled.slice(0, 5).map(g => g.name).join(', ')}`);
 
     return {
         ...response,
@@ -348,8 +487,8 @@ export async function getAllTimeGreats(): Promise<GamesResponse> {
     });
 
     // Filter to only released games
-    const legendaryGames = filterReleasedGames(legendary.results);
-    const eliteGames = filterReleasedGames(elite.results);
+    const legendaryGames = await filterReleasedGames(legendary.results);
+    const eliteGames = await filterReleasedGames(elite.results);
 
     // Shuffle function (Fisher-Yates for true randomness)
     const shuffle = <T>(array: T[]): T[] => {
@@ -517,62 +656,64 @@ export const getYearOptions = () => {
 };
 
 /**
- * Get Today's Pick - A recently released game that gamers are enjoying
- * 
- * Requirements:
- * - Released in 2026 (current year) - fresh games only!
- * - Has ratings (people are actually playing it)
- * - Good rating
- * - Changes daily at 12:00 AM IST (Indian Standard Time)
+ * Get Today's Pick - Uses YouTube trending + Priority Publishers
+ *
+ * Priority:
+ * 1. Recently released games from priority publishers with YouTube buzz
+ * 2. Games with high YouTube trending scores
+ * 3. Fallback to RAWG ratings
+ * - Changes daily at 12:00 AM IST
  */
 export async function getTodaysPickGame(): Promise<Game | null> {
-    // Get current date in IST (UTC+5:30)
-    // This ensures the pick changes at 12 AM IST regardless of user's timezone
     const nowUTC = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in milliseconds
+    const istOffset = 5.5 * 60 * 60 * 1000;
     const nowIST = new Date(nowUTC.getTime() + istOffset);
-
-    // Get IST date string (YYYY-MM-DD in IST)
     const todayIST = nowIST.toISOString().split("T")[0];
-
-    // For API calls, use UTC date (RAWG uses UTC for release dates)
     const todayUTC = nowUTC.toISOString().split("T")[0];
-    const currentYear = nowIST.getFullYear(); // Year in IST
+    const currentYear = nowIST.getFullYear();
 
-    // Start of current year
-    const yearStart = `${currentYear}-01-01`;
+    console.log(`[Today's Pick] Date: ${todayIST} (IST), using YouTube trending + publishers`);
 
-    console.log(`[Today's Pick] Date in IST: ${todayIST}, UTC: ${todayUTC}`);
-    console.log(`[Today's Pick] Looking for ${currentYear} games...`);
+    // Fetch priority publishers
+    const priorityPublishers = await getPriorityPublishers();
+    const publisherScores = new Map(
+        priorityPublishers.map(p => [p.publisher_name.toLowerCase(), p.priority_score])
+    );
 
-    // First try: Games released in the last 14 days (very fresh!)
-    const twoWeeksAgo = new Date(nowUTC);
-    twoWeeksAgo.setDate(nowUTC.getDate() - 14);
+    // Fetch recent games (last 30 days)
+    const thirtyDaysAgo = new Date(nowUTC);
+    thirtyDaysAgo.setDate(nowUTC.getDate() - 30);
 
     const recentResponse = await fetchFromRAWG<GamesResponse>("/games", {
-        ordering: "-rating,-ratings_count",
-        dates: `${twoWeeksAgo.toISOString().split("T")[0]},${todayUTC}`,
-        page_size: "30",
+        ordering: "-added,-rating",
+        dates: `${thirtyDaysAgo.toISOString().split("T")[0]},${todayUTC}`,
+        page_size: "50",
     });
 
+    // Get overrides for all games
+    const gameIds = recentResponse.results.map(g => g.id);
+    const overrides = await getGameOverrides(gameIds);
+
+    // Filter to released games
     let validGames = recentResponse.results.filter(game => {
+        const override = overrides.get(game.id);
+
+        if (override?.is_released === true) return true;
+        if (override?.is_released === false) return false;
+        if (override?.release_date && override.release_date <= todayUTC) return true;
+
         if (game.tba) return false;
         if (!game.released) return false;
         if (game.released > todayUTC) return false;
-        // For very recent games, accept even 30+ ratings
-        if (game.ratings_count < 30) return false;
-        if (game.rating < 3.5) return false;
-        // Must be current year
-        if (!game.released.startsWith(String(currentYear))) return false;
+
         return true;
     });
 
-    console.log(`[Today's Pick] Last 14 days candidates: ${validGames.map(g => g.name).join(', ') || 'none'}`);
+    console.log(`[Today's Pick] Found ${validGames.length} valid recent games`);
 
-    // Second try: All 2026 games
+    // Fallback if no recent games
     if (validGames.length === 0) {
-        console.log(`[Today's Pick] Trying all ${currentYear} games...`);
-
+        const yearStart = `${currentYear}-01-01`;
         const yearResponse = await fetchFromRAWG<GamesResponse>("/games", {
             ordering: "-rating,-ratings_count",
             dates: `${yearStart},${todayUTC}`,
@@ -583,54 +724,7 @@ export async function getTodaysPickGame(): Promise<Game | null> {
             if (game.tba) return false;
             if (!game.released) return false;
             if (game.released > todayUTC) return false;
-            if (game.ratings_count < 50) return false;
-            if (game.rating < 3.5) return false;
-            return true;
-        });
-
-        console.log(`[Today's Pick] ${currentYear} candidates: ${validGames.map(g => `${g.name}`).join(', ') || 'none'}`);
-    }
-
-    // Third try: Lower the ratings requirement for 2026 games
-    if (validGames.length === 0) {
-        console.log(`[Today's Pick] Trying ${currentYear} games with lower ratings requirement...`);
-
-        const lowReqResponse = await fetchFromRAWG<GamesResponse>("/games", {
-            ordering: "-added,-rating",
-            dates: `${yearStart},${todayUTC}`,
-            page_size: "50",
-        });
-
-        validGames = lowReqResponse.results.filter(game => {
-            if (game.tba) return false;
-            if (!game.released) return false;
-            if (game.released > todayUTC) return false;
-            if (game.ratings_count < 10) return false; // Very low threshold
-            if (game.rating < 3.0) return false;
-            return true;
-        });
-
-        console.log(`[Today's Pick] ${currentYear} (low req): ${validGames.map(g => g.name).join(', ') || 'none'}`);
-    }
-
-    // Last resort: Popular games from recent months
-    if (validGames.length === 0) {
-        console.log(`[Today's Pick] No ${currentYear} games found, using popular recent games...`);
-
-        const sixMonthsAgo = new Date(nowUTC);
-        sixMonthsAgo.setMonth(nowUTC.getMonth() - 6);
-
-        const popularResponse = await fetchFromRAWG<GamesResponse>("/games", {
-            ordering: "-ratings_count",
-            dates: `${sixMonthsAgo.toISOString().split("T")[0]},${todayUTC}`,
-            page_size: "30",
-        });
-
-        validGames = popularResponse.results.filter(game => {
-            if (game.tba) return false;
-            if (!game.released) return false;
-            if (game.released > todayUTC) return false;
-            if (game.ratings_count < 100) return false;
+            if (game.ratings_count < 10) return false;
             return true;
         });
     }
@@ -640,25 +734,92 @@ export async function getTodaysPickGame(): Promise<Game | null> {
         return null;
     }
 
-    // Pick one game based on IST date (changes at 12 AM IST)
-    // Hash is based on IST date string, so pick changes when IST date changes
+    // Score each game: Publisher priority + YouTube trending + Override boost
+    interface ScoredGame {
+        game: Game;
+        publisherScore: number;
+        youtubeTrending: number;
+        overrideBoost: number;
+        totalScore: number;
+    }
+
+    const scoredGames: ScoredGame[] = [];
+
+    // Get YouTube trending cache
+    const youtubeCacheMap = await getYouTubeTrendingScores(validGames.map(g => g.id));
+
+    // Check YouTube for top 10 candidates without cache
+    const topCandidates = validGames.slice(0, 10);
+    for (const game of topCandidates) {
+        if (!youtubeCacheMap.has(game.id)) {
+            // Fetch fresh from YouTube
+            const result = await getYouTubeTrendingScore(game.name);
+            if (result) {
+                await upsertYouTubeTrendingCache(game.id, game.name, {
+                    totalViews: result.totalViews,
+                    videoCount: result.videoCount,
+                    trendingScore: result.trendingScore,
+                    hasGameplayVideos: result.hasGameplayVideos,
+                });
+            }
+        }
+    }
+
+    // Re-fetch cache after updates
+    const updatedCache = await getYouTubeTrendingScores(validGames.map(g => g.id));
+
+    for (const game of validGames) {
+        // Publisher score
+        let publisherScore = 0;
+        if (game.publishers) {
+            for (const pub of game.publishers) {
+                const score = publisherScores.get(pub.name.toLowerCase()) || 0;
+                publisherScore = Math.max(publisherScore, score);
+            }
+        }
+
+        // YouTube trending from cache
+        const ytCache = updatedCache.get(game.id);
+        const youtubeTrending = ytCache?.trending_score || 0;
+
+        // Override boost
+        const override = overrides.get(game.id);
+        const overrideBoost = override?.is_trending ? 500 : (override?.trending_score || 0);
+
+        const totalScore = publisherScore + youtubeTrending + overrideBoost;
+
+        scoredGames.push({
+            game,
+            publisherScore,
+            youtubeTrending,
+            overrideBoost,
+            totalScore,
+        });
+    }
+
+    // Sort by total score
+    scoredGames.sort((a, b) => b.totalScore - a.totalScore);
+
+    console.log(`[Today's Pick] Top 5 scored games:`);
+    scoredGames.slice(0, 5).forEach((sg, i) => {
+        console.log(`  ${i + 1}. ${sg.game.name}: total=${sg.totalScore} (pub=${sg.publisherScore}, yt=${sg.youtubeTrending})`);
+    });
+
+    // Take top 5 and use date-based deterministic selection
+    const topScoredGames = scoredGames.slice(0, 5).map(sg => sg.game);
+
+    // Hash based on IST date
     let hash = 0;
     for (let i = 0; i < todayIST.length; i++) {
         hash = ((hash << 5) - hash) + todayIST.charCodeAt(i);
         hash |= 0;
     }
-    const index = Math.abs(hash) % validGames.length;
+    const index = Math.abs(hash) % topScoredGames.length;
 
-    const picked = validGames[index];
+    const picked = topScoredGames[index];
 
-    // Calculate next pick time (12 AM IST tomorrow)
-    const tomorrowIST = new Date(nowIST);
-    tomorrowIST.setDate(tomorrowIST.getDate() + 1);
-    tomorrowIST.setHours(0, 0, 0, 0);
-    const nextPickTimeUTC = new Date(tomorrowIST.getTime() - istOffset);
-
-    console.log(`✓ Today's Pick: ${picked.name} (released: ${picked.released}, rating: ${picked.rating}, ratings: ${picked.ratings_count})`);
-    console.log(`  IST Date: ${todayIST} | Next pick at 12:00 AM IST (${nextPickTimeUTC.toISOString()})`);
+    console.log(`✓ Today's Pick: ${picked.name} (released: ${picked.released})`);
+    console.log(`  Changes at 12:00 AM IST daily`);
 
     return picked;
 }

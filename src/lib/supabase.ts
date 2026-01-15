@@ -51,6 +51,40 @@ export interface Review {
     created_at: string;
 }
 
+// Game Override types
+export interface GameOverride {
+    id: string;
+    game_id: number;
+    game_name: string;
+    is_released: boolean | null;
+    release_date: string | null;
+    is_trending: boolean;
+    trending_score: number;
+    detected_via: string | null;
+    notes: string | null;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface YouTubeTrendingCache {
+    id: string;
+    game_id: number;
+    game_name: string;
+    total_views: number;
+    video_count: number;
+    avg_views_per_video: number;
+    trending_score: number;
+    has_gameplay_videos: boolean;
+    last_updated: string;
+}
+
+export interface PriorityPublisher {
+    id: string;
+    publisher_name: string;
+    publisher_slug: string | null;
+    priority_score: number;
+}
+
 // Auth helpers
 export async function signUp(email: string, password: string) {
     const { data, error } = await supabase.auth.signUp({ email, password });
@@ -204,4 +238,138 @@ export function subscribeToComments(gameId: number, callback: (comment: Comment)
             }
         )
         .subscribe();
+}
+
+// ============================================
+// Game Overrides functions (auto-detection)
+// ============================================
+
+export async function getGameOverride(gameId: number): Promise<GameOverride | null> {
+    const { data } = await supabase
+        .from("game_overrides")
+        .select("*")
+        .eq("game_id", gameId)
+        .single();
+    return data;
+}
+
+export async function getGameOverrides(gameIds: number[]): Promise<Map<number, GameOverride>> {
+    if (gameIds.length === 0) return new Map();
+
+    const { data } = await supabase
+        .from("game_overrides")
+        .select("*")
+        .in("game_id", gameIds);
+
+    const map = new Map<number, GameOverride>();
+    data?.forEach(override => map.set(override.game_id, override));
+    return map;
+}
+
+export async function upsertGameOverride(
+    gameId: number,
+    gameName: string,
+    updates: {
+        is_released?: boolean;
+        release_date?: string;
+        is_trending?: boolean;
+        trending_score?: number;
+        detected_via?: string;
+        notes?: string;
+    }
+) {
+    const { data, error } = await supabase
+        .from("game_overrides")
+        .upsert({
+            game_id: gameId,
+            game_name: gameName,
+            ...updates,
+            updated_at: new Date().toISOString(),
+        }, {
+            onConflict: "game_id",
+        })
+        .select()
+        .single();
+
+    return { data, error };
+}
+
+// ============================================
+// YouTube Trending Cache functions
+// ============================================
+
+export async function getYouTubeTrendingCache(gameId: number): Promise<YouTubeTrendingCache | null> {
+    const { data } = await supabase
+        .from("youtube_trending_cache")
+        .select("*")
+        .eq("game_id", gameId)
+        .single();
+    return data;
+}
+
+export async function getYouTubeTrendingScores(gameIds: number[]): Promise<Map<number, YouTubeTrendingCache>> {
+    if (gameIds.length === 0) return new Map();
+
+    const { data } = await supabase
+        .from("youtube_trending_cache")
+        .select("*")
+        .in("game_id", gameIds);
+
+    const map = new Map<number, YouTubeTrendingCache>();
+    data?.forEach(cache => map.set(cache.game_id, cache));
+    return map;
+}
+
+export async function upsertYouTubeTrendingCache(
+    gameId: number,
+    gameName: string,
+    stats: {
+        totalViews: number;
+        videoCount: number;
+        trendingScore: number;
+        hasGameplayVideos: boolean;
+    }
+) {
+    const avgViews = stats.videoCount > 0 ? Math.floor(stats.totalViews / stats.videoCount) : 0;
+
+    const { data, error } = await supabase
+        .from("youtube_trending_cache")
+        .upsert({
+            game_id: gameId,
+            game_name: gameName,
+            total_views: stats.totalViews,
+            video_count: stats.videoCount,
+            avg_views_per_video: avgViews,
+            trending_score: stats.trendingScore,
+            has_gameplay_videos: stats.hasGameplayVideos,
+            last_updated: new Date().toISOString(),
+        }, {
+            onConflict: "game_id",
+        })
+        .select()
+        .single();
+
+    return { data, error };
+}
+
+// ============================================
+// Priority Publishers functions
+// ============================================
+
+export async function getPriorityPublishers(): Promise<PriorityPublisher[]> {
+    const { data } = await supabase
+        .from("priority_publishers")
+        .select("*")
+        .order("priority_score", { ascending: false });
+    return data || [];
+}
+
+export async function getPublisherPriority(publisherName: string): Promise<number> {
+    const { data } = await supabase
+        .from("priority_publishers")
+        .select("priority_score")
+        .ilike("publisher_name", publisherName)
+        .single();
+
+    return data?.priority_score || 0;
 }

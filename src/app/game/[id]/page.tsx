@@ -8,7 +8,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-import { getGameDetails, getGameScreenshots, type Screenshot } from "@/lib/rawg";
+import { getGameDetails, getGameScreenshots, isGameReleased, type Screenshot } from "@/lib/rawg";
 import { getStoreLink } from "@/lib/affiliate-links";
 import { supabase, type RatingType } from "@/lib/supabase";
 import { getRatingClass, cn } from "@/lib/utils";
@@ -42,6 +42,9 @@ export default function GamePage({ params }: GamePageProps) {
     // Wishlist state
     const [isWishlisted, setIsWishlisted] = useState(false);
     const [wishlistLoading, setWishlistLoading] = useState(false);
+
+    // Release status (for auto-detection)
+    const [isReleased, setIsReleased] = useState(false);
 
     // Check wishlist status
     useEffect(() => {
@@ -108,6 +111,16 @@ export default function GamePage({ params }: GamePageProps) {
         queryFn: () => getGameScreenshots(Number(id)),
         enabled: !!id,
     });
+
+    // Check release status (auto-detection via YouTube)
+    useEffect(() => {
+        const checkReleaseStatus = async () => {
+            if (!game) return;
+            const released = await isGameReleased(game);
+            setIsReleased(released);
+        };
+        checkReleaseStatus();
+    }, [game]);
 
     // Fetch comments using React Query for better caching
     const { data: commentsData, refetch: refetchComments } = useQuery({
@@ -491,8 +504,8 @@ export default function GamePage({ params }: GamePageProps) {
 
                         {/* Sidebar */}
                         <div className="space-y-6">
-                            {/* Review Meter - Only show for released games */}
-                            {game.released && new Date(game.released) <= new Date() && (
+                            {/* Review Meter - Only show for released games (auto-detected) */}
+                            {isReleased && (
                                 <motion.div
                                     initial={{ opacity: 0, y: 20 }}
                                     animate={{ opacity: 1, y: 0 }}
