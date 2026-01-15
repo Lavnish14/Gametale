@@ -10,9 +10,10 @@ import { useRouter } from "next/navigation";
 
 import { getGameDetails, getGameScreenshots, isGameReleased, type Screenshot } from "@/lib/rawg";
 import { getStoreLink } from "@/lib/affiliate-links";
-import { supabase, type RatingType } from "@/lib/supabase";
+import { supabase, type RatingType, type VoteReason } from "@/lib/supabase";
 import { getRatingClass, cn } from "@/lib/utils";
 import { ReviewMeter } from "@/components/review-meter";
+import { VibeTags } from "@/components/vibe-tags";
 import { CommentsSection } from "@/components/comments-section";
 import { SkeletonCard } from "@/components/skeleton-card";
 import { useAuth } from "@/hooks/use-auth";
@@ -258,7 +259,7 @@ export default function GamePage({ params }: GamePageProps) {
     }, [id, userRating]);
 
     // Handle review submission
-    const handleReviewSubmit = async (rating: RatingType) => {
+    const handleReviewSubmit = async (rating: RatingType, reason?: VoteReason) => {
         if (!user) return;
         setIsSubmitting(true);
 
@@ -269,6 +270,7 @@ export default function GamePage({ params }: GamePageProps) {
                     user_id: user.id,
                     game_id: Number(id),
                     rating,
+                    reason,
                 }, {
                     onConflict: "user_id,game_id",
                 });
@@ -538,6 +540,15 @@ export default function GamePage({ params }: GamePageProps) {
                                     )}
                                 </motion.div>
                             )}
+
+                            {/* Vibe Tags */}
+                            <motion.div
+                                initial={{ opacity: 0, y: 20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ delay: 0.18 }}
+                            >
+                                <VibeTags gameId={game.id} />
+                            </motion.div>
 
                             {/* Game Info */}
                             <motion.div

@@ -3,12 +3,13 @@
 import { motion } from "framer-motion";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import type { RatingType } from "@/lib/supabase";
+import type { RatingType, VoteReason } from "@/lib/supabase";
 import { Share2, Sparkles, Check } from "lucide-react";
 
 interface ReviewMeterProps {
     initialRating?: RatingType | null;
-    onSubmit?: (rating: RatingType) => void;
+    initialReason?: VoteReason | null;
+    onSubmit?: (rating: RatingType, reason?: VoteReason) => void;
     disabled?: boolean;
     ratingDistribution?: {
         goat: number;
@@ -46,6 +47,15 @@ const RATINGS = {
         borderColor: "rgba(239, 68, 68, 0.4)",
         description: "Skip it",
     },
+} as const;
+
+const REASONS = {
+    story: { label: "Story", emoji: "📖" },
+    gameplay: { label: "Gameplay", emoji: "🎮" },
+    graphics: { label: "Graphics", emoji: "🎨" },
+    multiplayer: { label: "Multiplayer", emoji: "👥" },
+    value: { label: "Value", emoji: "💰" },
+    other: { label: "Other", emoji: "✨" },
 } as const;
 
 // Donut Chart Component with hover interactions
@@ -202,6 +212,7 @@ function DonutChart({
 
 export function ReviewMeter({
     initialRating,
+    initialReason,
     onSubmit,
     disabled = false,
     ratingDistribution,
@@ -209,6 +220,7 @@ export function ReviewMeter({
     gameId
 }: ReviewMeterProps) {
     const [selectedRating, setSelectedRating] = useState<RatingType | null>(initialRating ?? null);
+    const [selectedReason, setSelectedReason] = useState<VoteReason | null>(initialReason ?? null);
     const [hasChanged, setHasChanged] = useState(false);
     const [shareSuccess, setShareSuccess] = useState(false);
     const [hoveredSegment, setHoveredSegment] = useState<RatingType | null>(null);
@@ -279,7 +291,7 @@ export function ReviewMeter({
 
     const handleSubmit = () => {
         if (selectedRating && onSubmit) {
-            onSubmit(selectedRating);
+            onSubmit(selectedRating, selectedReason || undefined);
             setHasChanged(false);
         }
     };
@@ -442,6 +454,42 @@ export function ReviewMeter({
                     );
                 })}
             </div>
+
+            {/* Reason Selector - Show after rating is selected */}
+            {selectedRating && (
+                <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    className="space-y-3"
+                >
+                    <p className="text-zinc-500 text-sm text-center">Why?</p>
+                    <div className="flex flex-wrap justify-center gap-2">
+                        {(Object.keys(REASONS) as VoteReason[]).map((key) => {
+                            const config = REASONS[key];
+                            const isSelected = selectedReason === key;
+                            return (
+                                <motion.button
+                                    key={key}
+                                    whileHover={{ scale: 1.05 }}
+                                    whileTap={{ scale: 0.95 }}
+                                    onClick={() => {
+                                        setSelectedReason(key);
+                                        setHasChanged(true);
+                                    }}
+                                    className={cn(
+                                        "px-3 py-2 rounded-xl text-sm transition-all",
+                                        isSelected
+                                            ? "bg-violet-500/20 border border-violet-500/50 text-violet-400"
+                                            : "bg-zinc-900 border border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                                    )}
+                                >
+                                    {config.emoji} {config.label}
+                                </motion.button>
+                            );
+                        })}
+                    </div>
+                </motion.div>
+            )}
 
             {/* Submit Button */}
             {onSubmit && (

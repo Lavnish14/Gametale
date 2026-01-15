@@ -278,18 +278,21 @@ export default function HomePage() {
   const { data: trendingData, isLoading: trendingLoading } = useQuery({
     queryKey: ["trending"],
     queryFn: () => getTrendingGames(1, 12),
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
   });
 
   // Fetch upcoming games (4 most hyped)
   const { data: upcomingData, isLoading: upcomingLoading } = useQuery({
     queryKey: ["upcoming"],
     queryFn: () => getUpcomingGames(1, 4),
+    staleTime: 1000 * 60 * 5, // Cache for 5 minutes
   });
 
   // Fetch all-time greats
   const { data: goatsData, isLoading: goatsLoading } = useQuery({
     queryKey: ["goats"],
     queryFn: () => getAllTimeGreats(),
+    staleTime: 1000 * 60 * 10, // Cache for 10 minutes
   });
 
   // Fetch Today's "Hot Pick"
